@@ -1,0 +1,78 @@
+# Python 虚拟环境
+venv/
+env/
+.venv/
+ENV/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Python 分发
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Python 依赖包（不提交）
+*.whl
+*.tar.gz
+requirements.txt.lock
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+temp/
+tmp/
+
+# 测试报告
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# 环境文件
+.env
+.env.local
+.env.*.local
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre 类型检查
+.pyre/
+
+# 项目特定
+extracted/
+project.json
