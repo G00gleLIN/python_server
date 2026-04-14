@@ -156,13 +156,19 @@ class BlockParser:
             
             # 2.1 特殊处理：循环（循环通常不包含返回值嵌套，先分配序号）
             if opcode in LOOP_OPCODES:
-                self.current_step += 1
-                self._execute_loop(block_id, block, all_blocks, indent, self.current_step)
+                # ⚠️ control_repeat_until 需要在 _execute_loop 内部控制步骤号
+                # 因为条件积木需要先执行并占用步骤号
+                if opcode == 'control_repeat_until':
+                    self._execute_loop(block_id, block, all_blocks, indent, self.current_step)
+                else:
+                    self.current_step += 1
+                    self._execute_loop(block_id, block, all_blocks, indent, self.current_step)
                 return 
 
             # 2.2 特殊处理：条件
             if opcode in CONDITION_OPCODES:
-                self.current_step += 1
+                # condition 积木需要在 _execute_condition 内部控制步骤号
+                # 因为条件积木需要先执行并占用步骤号
                 self._execute_condition(block_id, block, all_blocks, indent, self.current_step)
                 return
 
@@ -188,21 +194,60 @@ class BlockParser:
         """执行循环类积木"""
         opcode = block.get('opcode', '')
         description = DECODE_OPCODES.get(opcode, opcode)
-        
-        # 获取循环次数
-        times = self._get_input_value(block, 'TIMES', all_blocks) or '无限'
-        
-        self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} 🔄 开始循环: 重复 {times} 次")
+
+        # 区分循环类型
+        if opcode == 'control_repeat':
+            # 重复执行 N 次
+            times = self._get_input_value(block, 'TIMES', all_blocks) or '无限'
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} 🔄 开始循环: 重复 {times} 次")
+
+        elif opcode == 'control_repeat_until':
+            # 重复执行直到条件满足
+            # ⭐ 关键：先执行 CONDITION 条件判断积木，然后再执行循环积木
+
+            condition_id = block.get('inputs', {}).get('CONDITION', [None, None])[1]
+            condition_result = None
+
+            # 1. 先执行条件积木（_execute_condition_block 内部会增加 current_step）
+            if condition_id and condition_id in all_blocks:
+                condition_block = all_blocks[condition_id]
+                condition_result = self._execute_condition_block(condition_id, condition_block, all_blocks, indent + 2)
+
+            # 2. 条件执行后，循环积木使用下一个步骤号
+            self.current_step += 1
+            loop_step = self.current_step
+
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{loop_step} 🔁 开始循环: 重复执行直到 条件 = {condition_result}")
+
+        elif opcode == 'control_while':
+            # 当...时重复（while 循环）
+            # ⭐ 与 control_repeat_until 类似，先执行条件积木
+            condition_id = block.get('inputs', {}).get('CONDITION', [None, None])[1]
+            condition_result = None
+
+            if condition_id and condition_id in all_blocks:
+                condition_block = all_blocks[condition_id]
+                condition_result = self._execute_condition_block(condition_id, condition_block, all_blocks, indent + 2)
+
+            self.current_step += 1
+            loop_step = self.current_step
+
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{loop_step} 🔁 开始循环: 当条件为真时重复 (条件 = {condition_result})")
+
+        elif opcode == 'control_forever':
+            # 无限循环
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} ♾️ 开始循环: 无限循环")
+
         self._log(indent, f"   ┌─ 循环体")
-        
+
         # 执行循环体内的积木
         substack_id = block.get('inputs', {}).get('SUBSTACK', [None, None])[1]
         if substack_id and substack_id in all_blocks:
             substack_block = all_blocks[substack_id]
             self._execute_block(substack_id, substack_block, all_blocks, indent + 4)
-        
+
         self._log(indent, f"   └─ 循环体结束")
-        
+
         # 继续执行下一个积木
         next_id = block.get('next')
         if next_id and next_id in all_blocks:
@@ -213,25 +258,38 @@ class BlockParser:
         """执行条件类积木（支持 if/else）"""
         opcode = block.get('opcode', '')
         description = DECODE_OPCODES.get(opcode, opcode)
+
+        # ⭐ 关键：先执行 CONDITION 条件积木，然后再执行条件判断
+        condition_id = block.get('inputs', {}).get('CONDITION', [None, None])[1]
+        condition_result = None
         
-        self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} ❓ 条件判断")
+        if condition_id and condition_id in all_blocks:
+            condition_block = all_blocks[condition_id]
+            # 先执行条件积木（会占用当前步骤号）
+            condition_result = self._execute_condition_block(condition_id, condition_block, all_blocks, indent + 2)
         
-        # 1. 执行“如果”分支 (SUBSTACK)
+        # 条件执行后，条件判断使用下一个步骤号
+        self.current_step += 1
+        judge_step = self.current_step
+        
+        self._log(indent, f"📦 [任务 {self.current_task_id}] #{judge_step} ❓ 条件判断 (条件 = {condition_result})")
+
+        # 1. 执行"如果"分支 (SUBSTACK)
         substack_id = block.get('inputs', {}).get('SUBSTACK', [None, None])[1]
         if substack_id and substack_id in all_blocks:
             self._log(indent, f"   ┌─ 如果分支")
             substack_block = all_blocks[substack_id]
             self._execute_block(substack_id, substack_block, all_blocks, indent + 4)
             self._log(indent, f"   └─ 如果分支结束")
-            
-        # 2. ⭐ 新增：执行“否则”分支 (SUBSTACK2)
+
+        # 2. ⭐ 新增：执行"否则"分支 (SUBSTACK2)
         substack2_id = block.get('inputs', {}).get('SUBSTACK2', [None, None])[1]
         if substack2_id and substack2_id in all_blocks:
             self._log(indent, f"   ┌─ 否则分支")
             substack2_block = all_blocks[substack2_id]
             self._execute_block(substack2_id, substack2_block, all_blocks, indent + 4)
             self._log(indent, f"   └─ 否则分支结束")
-        
+
         # 3. 继续执行下一个积木
         next_id = block.get('next')
         if next_id and next_id in all_blocks:
@@ -315,10 +373,16 @@ class BlockParser:
             num1 = self._get_input_value(block, 'NUM1', all_blocks)
             num2 = self._get_input_value(block, 'NUM2', all_blocks)
             if num1 is not None and num2 is not None:
-                result = float(num1) + float(num2)
-                self._log(indent, f"     → 返回值: {result}")
-                return result
-        
+                try:
+                    result = float(num1) + float(num2)
+                    self._log(indent, f"     → 返回值: {result}")
+                    return result
+                except (ValueError, TypeError):
+                    # 操作数是变量，返回表达式
+                    expr = f"({num1} + {num2})"
+                    self._log(indent, f"     → 返回表达式: {expr}")
+                    return expr
+
         return "[嵌套积木执行]"
     
     def _get_shadow_value(self, block):
@@ -340,12 +404,13 @@ class BlockParser:
         """获取输入值"""
         inputs = block.get('inputs', {})
         input_data = inputs.get(input_name)
-        
+
         if not input_data:
             return None
-        
+
         input_type = input_data[0] if len(input_data) > 0 else None
-        
+
+        # 类型 1: 普通值或影子积木引用
         if input_type == 1:
             value_data = input_data[1] if len(input_data) > 1 else None
             if isinstance(value_data, list):
@@ -353,8 +418,100 @@ class BlockParser:
             elif isinstance(value_data, str) and value_data in all_blocks:
                 shadow_block = all_blocks[value_data]
                 return self._get_shadow_value(shadow_block)
-        
+
+        # 类型 3: 积木引用或内联值
+        elif input_type == 3:
+            # 可能有多个候选值，取第一个有效的
+            for i in range(1, len(input_data)):
+                candidate = input_data[i]
+                if isinstance(candidate, list):
+                    # [12, "X", "varId"] 格式：变量引用，返回变量名和值
+                    if len(candidate) >= 3:
+                        # 返回变量名（第二个元素）
+                        return candidate[1]
+                    elif len(candidate) >= 2:
+                        # 普通值 [类型, 值]
+                        return candidate[1]
+                elif isinstance(candidate, str) and candidate in all_blocks:
+                    # 积木引用
+                    ref_block = all_blocks[candidate]
+                    return self._get_shadow_value(ref_block)
+
         return None
+
+    def _get_condition_description(self, block, all_blocks):
+        """获取条件描述（用于 repeat_until 等积木）"""
+        condition_id = block.get('inputs', {}).get('CONDITION', [None, None])[1]
+        if condition_id and condition_id in all_blocks:
+            condition_block = all_blocks[condition_id]
+            condition_opcode = condition_block.get('opcode', '')
+
+            # 获取运算符描述
+            if condition_opcode in DECODE_OPCODES:
+                # 尝试获取操作数
+                operand1 = self._get_input_value(condition_block, 'OPERAND1', all_blocks)
+                operand2 = self._get_input_value(condition_block, 'OPERAND2', all_blocks)
+
+                if operand1 is not None and operand2 is not None:
+                    op_desc = DECODE_OPCODES.get(condition_opcode, condition_opcode)
+                    return f"{operand1} {op_desc} {operand2}"
+
+            # 默认返回
+            return f"条件满足 ({condition_opcode})"
+
+        return "条件满足"
+
+    def _execute_condition_block(self, block_id, block, all_blocks, indent):
+        """执行条件积木并返回布尔值（用于 repeat_until 的条件判断）"""
+        opcode = block.get('opcode', '')
+        description = DECODE_OPCODES.get(opcode, opcode)
+        
+        # 增加步骤计数
+        self.current_step += 1
+        step = self.current_step
+        
+        # 解析参数（可能包含嵌套积木）
+        params = self._parse_block_inputs(block, all_blocks, indent)
+        
+        # 获取操作数值
+        operand1 = self._get_input_value(block, 'OPERAND1', all_blocks)
+        operand2 = self._get_input_value(block, 'OPERAND2', all_blocks)
+        
+        # 根据运算符计算结果
+        result = None
+        if opcode == 'operator_gt':
+            if operand1 is not None and operand2 is not None:
+                try:
+                    result = float(operand1) > float(operand2)
+                except (ValueError, TypeError):
+                    # 操作数是变量，无法直接计算
+                    result = f"({operand1} > {operand2})"
+        elif opcode == 'operator_lt':
+            if operand1 is not None and operand2 is not None:
+                try:
+                    result = float(operand1) < float(operand2)
+                except (ValueError, TypeError):
+                    result = f"({operand1} < {operand2})"
+        elif opcode == 'operator_equals':
+            if operand1 is not None and operand2 is not None:
+                try:
+                    result = float(operand1) == float(operand2)
+                except (ValueError, TypeError):
+                    result = f"({operand1} == {operand2})"
+        elif opcode == 'operator_and':
+            result = bool(operand1) and bool(operand2)
+        elif opcode == 'operator_or':
+            result = bool(operand1) or bool(operand2)
+        elif opcode == 'operator_not':
+            result = not bool(operand1)
+        
+        # 输出日志
+        if result is not None:
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} [条件] {description}{params} → {result}")
+        else:
+            self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} [条件] {description}{params}")
+        
+        return result
     
     def _log(self, indent, message):
         """输出日志"""

@@ -9,15 +9,21 @@ DECODE_OPCODES = {
     # === 控制类 ===
     "control_wait": "⏱️ 等待",
     "control_repeat": "🔄 重复执行",
+    "control_repeat_until": "🔁 重复执行直到",
+    "control_while": "🔁 当...时重复",
+    "control_for_each": "🔢 遍历计数",
     "control_forever": "♾️ 重复执行（无限）",
     "control_if": "❓ 如果",
     "control_if_else": "❓ 如果...否则",
     "control_wait_until": "⏱️ 等待直到",
     "control_stop": "🛑 停止",
-    "control_start_as_clone": "👶 当作为克隆体启动时",
-    "control_create_clone_of": "📋 创建克隆体",
-    "control_delete_this_clone": "🗑️ 删除此克隆体",
-    "control_all_at_once": "⚡ 同时执行",
+    # "control_get_counter": "🔢 获取计数器",
+    # "control_incr_counter": "🔢 计数器加1",
+    # "control_clear_counter": "🗑️ 清空计数器",
+    # "control_start_as_clone": "👶 当作为克隆体启动时",
+    # "control_create_clone_of": "📋 创建克隆体",
+    # "control_delete_this_clone": "🗑️ 删除此克隆体",
+    # "control_all_at_once": "⚡ 同时执行",
     
     
     # === 运算符类 ===
@@ -43,8 +49,8 @@ DECODE_OPCODES = {
     # === 数据类（变量和列表）===
     "data_setvariableto": "📦 变量设为",
     "data_changevariableby": "📦 变量增加",
-    "data_showvariable": "👁️ 显示变量",
-    "data_hidevariable": "🙈 隐藏变量",
+    # "data_showvariable": "👁️ 显示变量",
+    # "data_hidevariable": "🙈 隐藏变量",
     "data_addtolist": "📋 添加到列表",
     "data_deleteoflist": "🗑️ 删除列表项",
     "data_deletealloflist": "🗑️ 清空列表",
@@ -54,8 +60,8 @@ DECODE_OPCODES = {
     "data_itemnumoflist": "📊 列表项编号",
     "data_lengthoflist": "📊 列表长度",
     "data_listcontainsitem": "🔍 列表包含",
-    "data_showlist": "👁️ 显示列表",
-    "data_hidelist": "🙈 隐藏列表",
+    # "data_showlist": "👁️ 显示列表",
+    # "data_hidelist": "🙈 隐藏列表",
     
     # === 自定义扩展类 ===
     "smartpi_whenInfraredPressed": "🔘 SmartPi 当红外按键按下",
@@ -203,6 +209,8 @@ SKIP_OPCODES = {
 # 循环类积木（需要特殊处理开始和结束）
 LOOP_OPCODES = {
     "control_repeat": "🔄 重复执行",
+    "control_repeat_until": "🔁 重复执行直到",
+    "control_while": "🔁 当...时重复",
     "control_forever": "♾️ 重复执行（无限）",
 }
 
