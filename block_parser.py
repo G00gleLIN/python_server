@@ -33,6 +33,9 @@ class BlockParser:
     def __init__(self):
         self.execution_order = 0  # 执行顺序计数器
         self.output_lines = []    # 输出日志
+        self.cmd_data = []        # CMD 命令构建用结构化数据 (供 cmd_builder 使用)
+        self.variables_found = {} # 收集到的变量 {name: id}
+        self.lists_found = {}     # 收集到的列表 {name: id}
         
     def parse_project(self, project_json_path):
         """解析整个 project.json 文件"""
@@ -100,6 +103,8 @@ class BlockParser:
                 var_value = var_data[1] if isinstance(var_data, list) else ""
                 print(f"   📦 {var_name} = {var_value}")
                 self._log(0, f"📊 变量: {var_name} = {var_value}")
+                # 收集到 CMD 变量表
+                self.variables_found[var_name] = var_id
     
     def _parse_lists(self, target):
         """解析列表"""
@@ -111,6 +116,8 @@ class BlockParser:
                 list_items = list_data[1] if isinstance(list_data, list) else []
                 print(f"   📋 {list_name} = {list_items}")
                 self._log(0, f"📋 列表: {list_name} = {list_items}")
+                # 收集到 CMD 列表
+                self.lists_found[list_name] = list_id
     
     def _parse_blocks(self, blocks):
         """解析所有积木块 - 多任务独立工作序列"""
@@ -183,6 +190,17 @@ class BlockParser:
             # 2.5 输出日志
             self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} {description}{params}")
 
+            # 2.6 收集 CMD 数据
+            parsed_inputs = self._extract_block_inputs(block, all_blocks)
+            self._collect_cmd_data(
+                block=block,
+                opcode=opcode,
+                step=step,
+                inputs=parsed_inputs,
+                is_nested=is_nested_input,
+                has_return=False,
+            )
+
         # 3. 继续执行下一个积木
         if not is_nested_input:
             next_id = block.get('next')
@@ -237,6 +255,17 @@ class BlockParser:
         elif opcode == 'control_forever':
             # 无限循环
             self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} ♾️ 开始循环: 无限循环")
+
+        # 收集循环积木本身的 CMD 数据
+        loop_inputs = self._extract_block_inputs(block, all_blocks)
+        self._collect_cmd_data(
+            block=block,
+            opcode=opcode,
+            step=step,
+            inputs=loop_inputs,
+            is_nested=False,
+            has_return=False,
+        )
 
         self._log(indent, f"   ┌─ 循环体")
 
@@ -367,6 +396,17 @@ class BlockParser:
         
         # 输出日志（带上任务 ID 和序号）
         self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} [嵌套] {description}{params}")
+
+        # 收集 CMD 数据
+        parsed_inputs = self._extract_block_inputs(block, all_blocks)
+        self._collect_cmd_data(
+            block=block,
+            opcode=opcode,
+            step=step,
+            inputs=parsed_inputs,
+            is_nested=True,
+            has_return=True,
+        )
         
         # 根据积木类型返回值
         if opcode == 'operator_add':
@@ -510,6 +550,17 @@ class BlockParser:
             self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} [条件] {description}{params} → {result}")
         else:
             self._log(indent, f"📦 [任务 {self.current_task_id}] #{step} [条件] {description}{params}")
+
+        # 收集 CMD 数据
+        parsed_inputs = self._extract_block_inputs(block, all_blocks)
+        self._collect_cmd_data(
+            block=block,
+            opcode=opcode,
+            step=step,
+            inputs=parsed_inputs,
+            is_nested=True,
+            has_return=True,
+        )
         
         return result
     
@@ -519,6 +570,88 @@ class BlockParser:
         full_message = f"{prefix}{message}"
         print(full_message)
         self.output_lines.append(full_message)
+
+    def _collect_cmd_data(self, block, opcode, step, inputs=None, fields=None,
+                           is_nested=False, has_return=False):
+        """收集积木块的结构化数据，供 CMD 命令构建使用"""
+        if inputs is None:
+            inputs = {}
+        if fields is None:
+            fields = {}
+
+        # 解析实际输入值
+        parsed_inputs = {}
+        if inputs:
+            for inp_name, inp_value in inputs.items():
+                if isinstance(inp_value, tuple) and len(inp_value) >= 2:
+                    # (type, value) 格式
+                    parsed_inputs[inp_name] = inp_value[1]
+                else:
+                    parsed_inputs[inp_name] = inp_value
+
+        # 解析字段值
+        parsed_fields = {}
+        block_fields = block.get('fields', {})
+        for fname, fdata in block_fields.items():
+            if isinstance(fdata, list) and len(fdata) > 0:
+                parsed_fields[fname] = fdata[0]
+            elif isinstance(fdata, str):
+                parsed_fields[fname] = fdata
+
+        entry = {
+            'step': step,
+            'opcode': opcode or block.get('opcode', ''),
+            'task_id': getattr(self, 'current_task_id', 1),
+            'inputs': parsed_inputs,
+            'fields': parsed_fields,
+            'is_nested': is_nested,
+            'has_return': has_return,
+            'description': DECODE_OPCODES.get(opcode or block.get('opcode', ''), ''),
+        }
+        self.cmd_data.append(entry)
+
+    def get_cmd_data(self):
+        """获取已收集的 CMD 数据"""
+        return {
+            'blocks': self.cmd_data,
+            'variables': self.variables_found,
+            'lists': self.lists_found,
+        }
+
+    def _extract_block_inputs(self, block, all_blocks):
+        """从积木块中提取输入参数的解析值（供 CMD 收集使用）"""
+        result = {}
+        inputs = block.get('inputs', {})
+        for inp_name, inp_data in inputs.items():
+            if not inp_data or not isinstance(inp_data, list) or len(inp_data) < 2:
+                continue
+            input_type = inp_data[0]
+            value_data = inp_data[1]
+
+            if input_type == 1:  # 直接值
+                if isinstance(value_data, list) and len(value_data) >= 2:
+                    result[inp_name] = value_data[1]
+                elif isinstance(value_data, str) and value_data in all_blocks:
+                    shadow_block = all_blocks[value_data]
+                    sv = self._get_shadow_value(shadow_block)
+                    result[inp_name] = sv
+                else:
+                    result[inp_name] = value_data
+
+            elif input_type == 3:  # 积木引用/嵌套
+                if isinstance(value_data, str) and value_data in all_blocks:
+                    ref_block = all_blocks[value_data]
+                    # 检查是否是变量引用 [type, varName, varId]
+                    if isinstance(value_data, str):
+                        sv = self._get_shadow_value(ref_block)
+                        if sv:
+                            result[inp_name] = f"__var__{sv}"
+                        else:
+                            result[inp_name] = None
+                elif isinstance(value_data, list) and len(value_data) >= 3:
+                    result[inp_name] = f"__var__{value_data[1]}"
+
+        return result
 
 
 def main():

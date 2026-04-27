@@ -92,6 +92,7 @@ if sys.platform == 'win32':
         pass
 
 from block_parser import BlockParser
+from cmd_builder import CmdBuilder, decode_cmd_detail
 
 
 class BlockParseServer:
@@ -183,6 +184,16 @@ class BlockParseServer:
                     'request_count': self.request_count,
                     'connected_clients': len(self.clients)
                 }, ensure_ascii=False))
+
+            elif action == 'generate_commands':
+                # 生成 CMD 命令帧
+                project_data = request.get('project_data')
+                if not project_data:
+                    await self.send_error(websocket, '缺少 project_data 参数', req_id)
+                    return
+
+                result = self.generate_commands_data(project_data)
+                await self.send_response(websocket, result, req_id)
             
             else:
                 await self.send_error(websocket, f'未知的操作: {action}', req_id)
@@ -253,6 +264,116 @@ class BlockParseServer:
             return {
                 'status': 'error',
                 'message': f'读取文件失败: {str(e)}'
+            }
+
+    def generate_commands_data(self, project_data):
+        """解析项目数据并生成 CMD 命令帧"""
+        try:
+            start_time = datetime.now()
+            Logger.info("开始生成 CMD 命令...")
+
+            # 1. 先解析项目（收集 cmd_data）
+            self.parser = BlockParser()
+            self.parser.execution_order = 0
+            self.parser.output_lines = []
+            self.parser.cmd_data = []
+            self.parser.variables_found = {}
+            self.parser.lists_found = {}
+
+            targets = project_data.get('targets', [])
+            all_variables = {}
+            all_lists = {}
+
+            for idx, target in enumerate(targets):
+                self.parser.parse_target(target, idx)
+                # 收集变量和列表
+                variables = target.get('variables', {})
+                for var_id, var_data in variables.items():
+                    if isinstance(var_data, list) and len(var_data) > 0:
+                        all_variables[var_data[0]] = var_id
+                lists_dict = target.get('lists', {})
+                for lst_id, lst_data in lists_dict.items():
+                    if isinstance(lst_data, list) and len(lst_data) > 0:
+                        all_lists[lst_data[0]] = lst_id
+
+            elapsed_parse = (datetime.now() - start_time).total_seconds()
+
+            # 2. 使用 CmdBuilder 构建 CMD 命令
+            builder = CmdBuilder()
+            result = builder.build_commands(
+                block_list=self.parser.cmd_data,
+                variables=all_variables,
+                lists=all_lists,
+            )
+
+            # 3. 逐条打印 CMD 命令（带详细解析）
+            Logger.info("=" * 70)
+            Logger.info("CMD 命令输出:")
+            Logger.info("-" * 70)
+            for i, hex_str in enumerate(result['cmd_hex_strings']):
+                detail = decode_cmd_detail(result['frame'][i*24 : (i+1)*24])
+                block_info = self.parser.cmd_data[i] if i < len(self.parser.cmd_data) else {}
+                opcode_name = block_info.get('opcode', 'unknown')
+                desc = block_info.get('description', '')
+                step_num = block_info.get('step', '?')
+                Logger.info(f"  [{i+1:3d}] #{step_num} {hex_str}")
+                Logger.info(f"        │ opcode={opcode_name}  {desc}")
+                if detail:
+                    for dline in detail:
+                        Logger.info(f"        │  {dline}")
+                Logger.info(f"        └─ {'─' * 56}")
+
+            elapsed_total = (datetime.now() - start_time).total_seconds()
+            Logger.info("-" * 70)
+            Logger.success(f"CMD 生成完成: {result['stats']['total_cmds']} 条命令, "
+                           f"帧长 {len(result['frame'])}B, 耗时 {elapsed_total:.3f}s")
+            Logger.info("=" * 70)
+
+            # 4. 构建每条命令的解析详情文本
+            cmd_details = []
+            frame_bytes = result['frame']
+            for i, hex_str in enumerate(result['cmd_hex_strings']):
+                detail_lines = []
+                start = i * 24
+                if start + 24 <= len(frame_bytes):
+                    raw_cmd = frame_bytes[start:start+24]
+                    try:
+                        detail = decode_cmd_detail(raw_cmd)
+                        if detail:
+                            detail_lines.extend(detail)
+                    except Exception:
+                        pass
+
+                # 附带积木块信息
+                block_info = self.parser.cmd_data[i] if i < len(self.parser.cmd_data) else {}
+                opcode_name = block_info.get('opcode', '')
+                desc = block_info.get('description', '')
+                if opcode_name:
+                    detail_lines.insert(0, f"opcode={opcode_name}")
+                if desc:
+                    detail_lines.insert(1, f"desc: {desc}")
+
+                cmd_details.append(detail_lines)
+
+            return {
+                'status': 'success',
+                'steps': self.parser.execution_order,
+                'output': self.parser.output_lines,
+                'cmd_stats': result['stats'],
+                'cmd_hex_strings': result['cmd_hex_strings'],
+                'cmd_details': cmd_details,
+                'frame_hex': result['frame_hex'],
+                'frame_length': len(result['frame']),
+                'errors': result['errors'],
+                'elapsed': elapsed_total,
+            }
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            return {
+                'status': 'error',
+                'message': f'CMD 生成失败: {str(e)}'
             }
     
     async def send_response(self, websocket, data, req_id):
